@@ -8,39 +8,39 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 
-// Basit Bir 3D Vektör Yapısı
 struct Vector3 {
     float x, y, z;
 };
 
-// 2D Ekran Koordinatı Yapısı
 struct Vector2 {
     int x, y;
 };
 
-// Sunucu Genişlik ve Yükseklik Ayarları (İşlemciyi zorlamak için arttırılabilir)
-const int WIDTH = 120;
-const int HEIGHT = 40;
+// Çözünürlüğü Render'ı yormayacak ama net görünecek şekilde optimize ettik
+const int WIDTH = 80;
+const int HEIGHT = 30;
 
-// 3D Noktayı 2D Ekrana İzdüşürme (Perspective Projection) Matematiği
-Vector2 Project(Vector3 p, float angle) {
-    // Y ekseninde döndürme matrisi uygulaması
-    float rad = angle * M_PI / 180.0f;
-    float rotX = p.x * std::cos(rad) - p.z * std::sin(rad);
-    float rotZ = p.x * std::sin(rad) + p.z * std::cos(rad);
+Vector2 Project(Vector3 p, float angleX, float angleY) {
+    // X ekseninde döndürme
+    float radX = angleX * M_PI / 180.0f;
+    float r1y = p.y * std::cos(radX) - p.z * std::sin(radX);
+    float r1z = p.y * std::sin(radX) + p.z * std::cos(radX);
 
-    // Kamera mesafesi ayarı
+    // Y ekseninde döndürme
+    float radY = angleY * M_PI / 180.0f;
+    float rotX = p.x * std::cos(radY) - r1z * std::sin(radY);
+    float rotZ = p.x * std::sin(radY) + r1z * std::cos(radY);
+
     float distance = 3.5f;
-    float fov = 60.0f;
+    float fov = 45.0f;
 
     float projectedX = (rotX * fov) / (rotZ + distance) + (WIDTH / 2);
-    float projectedY = (p.y * fov) / (rotZ + distance) + (HEIGHT / 2);
+    float projectedY = (r1y * fov) / (rotZ + distance) + (HEIGHT / 2);
 
     return Vector2{(int)projectedX, (int)projectedY};
 }
 
 int main() {
-    // Render Port Ayarı
     const char* port_env = std::getenv("PORT");
     int port = port_env ? std::stoi(port_env) : 10000;
 
@@ -57,88 +57,117 @@ int main() {
     address.sin_port = htons(port);
 
     if (bind(server_fd, (struct sockaddr*)&address, sizeof(address)) < 0) return 1;
-    if (listen(server_fd, 10) < 0) return 1;
+    if (listen(server_fd, 20) < 0) return 1;
 
-    std::cout << "3D Software Engine " << port << " portunda aktif!" << std::endl;
+    std::cout << "EphyXDrive Engine " << port << " portunda stabil modda aktif!" << std::endl;
 
-    // 3D Küpün Köşe Noktaları (Vertices)
     std::vector<Vector3> cubeVertices = {
         {-1, -1, -1}, { 1, -1, -1}, { 1,  1, -1}, {-1,  1, -1},
         {-1, -1,  1}, { 1, -1,  1}, { 1,  1,  1}, {-1,  1,  1}
     };
 
-    // Küpün Kenar Çizgileri (Edges) - Noktaları birbirine bağlar
     std::vector<std::pair<int, int>> cubeEdges = {
         {0,1}, {1,2}, {2,3}, {3,0},
         {4,5}, {5,6}, {6,7}, {7,4},
         {0,4}, {1,5}, {2,6}, {3,7}
     };
 
-    float rotationAngle = 0.0f;
+    float angleX = 0.0f;
+    float angleY = 0.0f;
 
     while (true) {
         int client_fd = accept(server_fd, nullptr, nullptr);
         if (client_fd >= 0) {
-            // Her istek geldiğinde küpü biraz döndür (Sınır zorlama mekanizması)
-            rotationAngle += 15.0f;
-            if (rotationAngle >= 360.0f) rotationAngle -= 360.0f;
+            // Açıyı her istekte kontrollü arttırıyoruz
+            angleX += 5.0f;
+            angleY += 7.0f;
+            if (angleX >= 360.0f) angleX -= 360.0f;
+            if (angleY >= 360.0f) angleY -= 360.0f;
 
-            // Arka Plan Tamponu (Frame Buffer) Oluşturma ve Temizleme
             std::vector<std::string> buffer(HEIGHT, std::string(WIDTH, ' '));
-
-            // 3D Noktaları İzdüşür
             std::vector<Vector2> projectedPoints;
+            
             for (const auto& vertex : cubeVertices) {
-                projectedPoints.push_back(Project(vertex, rotationAngle));
+                projectedPoints.push_back(Project(vertex, angleX, angleY));
             }
 
-            // Rasterizasyon: Çizgileri Ekrana Nokta Olarak Basma
             for (const auto& edge : cubeEdges) {
                 Vector2 p1 = projectedPoints[edge.first];
                 Vector2 p2 = projectedPoints[edge.second];
 
-                // Basit DDA Çizgi Çizme Algoritması
                 int dx = p2.x - p1.x;
                 int dy = p2.y - p1.y;
                 int steps = std::max(std::abs(dx), std::abs(dy));
 
-                float xInc = dx / (float)steps;
-                float yInc = dy / (float)steps;
+                float xInc = steps == 0 ? 0 : dx / (float)steps;
+                float yInc = steps == 0 ? 0 : dy / (float)steps;
 
                 float x = p1.x;
                 float y = p1.y;
 
                 for (int i = 0; i <= steps; i++) {
                     if (x >= 0 && x < WIDTH && y >= 0 && y < HEIGHT) {
-                        buffer[(int)y][(int)x] = '#'; // Küpün gövde çizgisi karakteri
+                        buffer[(int)y][(int)x] = '#';
                     }
                     x += xInc;
                     y += yInc;
                 }
             }
 
-            // Ekrandaki ASCII karakterleri tek bir HTML metnine dönüştürme
             std::string engineRenderOutput = "";
             for (int i = 0; i < HEIGHT; i++) {
-                engineRenderOutput += buffer[i] + "\n";
+                engineRenderOutput += buffer[i] + "\\n"; // JS içine basılacağı için kaçış karakteri ekledik
             }
 
-            // Tarayıcıya Gönderilecek Dinamik Sayfa Yapısı
+            // Sayfa yenileme bitti! JavaScript motoru saniyede 30 kez arka planda istek atacak
             std::string html_content = 
-                "<html><head><meta http-equiv='refresh' content='0.1'>" // Saniyede 10 kere sayfayı yeniler (FPS sayacı gibi)
-                "<style>body{background:#111;color:#0f0;font-family:monospace;white-space:pre;font-size:14px;display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;margin:0;}</style></head>"
+                "<!DOCTYPE html><html><head><meta charset='UTF-8'>"
+                "<style>body{background:#0a0a0a;color:#00ff66;font-family:monospace;display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;margin:0;overflow:hidden;}"
+                "pre{background:#111;padding:20px;border:1px solid #00ff66;box-shadow:0 0 15px rgba(0,255,102,0.3);border-radius:5px;line-height:1.2;font-size:14px;}</style></head>"
                 "<body>"
-                "<h2>EphyXDrive 3D Software Engine v0.01 Pre-Alpha</h2>"
-                "<div>" + engineRenderOutput + "</div>"
-                "<p>Aci: " + std::to_string((int)rotationAngle) + " derece - Tamamen CPU ile hesaplaniyor.</p>"
+                "<h2>EphyXDrive 3D Engine v0.02 Pre-Alpha</h2>"
+                "<pre id='render'></pre>"
+                "<p>Durum: Sunucu Baglantisi Akici</p>"
+                "<script>"
+                "function updateFrame() {"
+                "  fetch(window.location.href, {headers: {'X-Requested-With': 'XMLHttpRequest'}})"
+                "    .then(r => r.text())"
+                "    .then(data => {"
+                "      if(data.get) { document.getElementById('render').textContent = data; }"
+                "    }).catch(() => {});"
+                "}"
+                "// Sayfayi yenilemeden arka planda veriyi ceker"
+                "setInterval(() => {"
+                "  fetch(window.location.pathname, {headers:{'X-Engine-Fetch':'true'}})"
+                "  .then(res => res.text())"
+                "  .then(text => { document.getElementById('render').textContent = text; });"
+                "}, 100);" // 100ms araliklarla akici yenileme
+                "</script>"
                 "</body></html>";
 
-            std::string response = "HTTP/1.1 200 OK\r\n"
-                                   "Content-Type: text/html; charset=UTF-8\r\n"
-                                   "Content-Length: " + std::to_string(html_content.length()) + "\r\n"
-                                   "Connection: close\r\n\r\n" + html_content;
-            
-            send(client_fd, response.c_str(), response.length(), 0);
+            // Eğer istek arka plandaki JavaScript'ten geliyorsa sadece ham 3D metni gönder
+            char header_buffer[1024] = {0};
+            recv(client_fd, header_buffer, 1024, 0);
+            std::string headers(header_buffer);
+
+            if (headers.find("X-Engine-Fetch") != std::string::npos) {
+                std::string clean_matrix = "";
+                for (int i = 0; i < HEIGHT; i++) {
+                    clean_matrix += buffer[i] + "\n";
+                }
+                std::string response = "HTTP/1.1 200 OK\r\n"
+                                       "Content-Type: text/plain; charset=UTF-8\r\n"
+                                       "Content-Length: " + std::to_string(clean_matrix.length()) + "\r\n"
+                                       "Connection: close\r\n\r\n" + clean_matrix;
+                send(client_fd, response.c_str(), response.length(), 0);
+            } else {
+                // Normal kullanıcı ilk kez girdiğinde arayüzü gönder
+                std::string response = "HTTP/1.1 200 OK\r\n"
+                                       "Content-Type: text/html; charset=UTF-8\r\n"
+                                       "Content-Length: " + std::to_string(html_content.length()) + "\r\n"
+                                       "Connection: close\r\n\r\n" + html_content;
+                send(client_fd, response.c_str(), response.length(), 0);
+            }
             close(client_fd);
         }
     }
